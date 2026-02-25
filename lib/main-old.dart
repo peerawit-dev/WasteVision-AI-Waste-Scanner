@@ -25,7 +25,7 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   // ==========================================
   // 🔑 ใส่ API Key ของคุณตรงนี้
   // ==========================================
-  final String apiKey = "AIzaSyDoSa9rbXOTFjedIBNC-XFqsbAEDGzeVug";
+  final String apiKey = "";
   // ==========================================
 
   String resultText = "📷 พร้อมสแกน";
