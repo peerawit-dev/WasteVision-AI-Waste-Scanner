@@ -46,7 +46,6 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   int currentResultIndex = 0;
   // ---------------- cache / rate limit ----------------
   final Map<String, Map<String, dynamic>> _barcodeCache = {};
-  static const int _barcodeCacheMaxEntries = 200;
   DateTime? _lastBarcodeRequestAt;
   final Duration _barcodeCooldown = const Duration(seconds: 2);
   final int _maxRetries = 2;
@@ -262,12 +261,7 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
               }
             }
 
-            // cache result (พร้อมจำกัดขนาด cache ไม่ให้โตไม่จำกัด)
-            if (_barcodeCache.length >= _barcodeCacheMaxEntries) {
-              // ลบตัวแรกสุด (Map ใน Dart เก็บตามลำดับ insertion)
-              final firstKey = _barcodeCache.keys.first;
-              _barcodeCache.remove(firstKey);
-            }
+            // cache result
             _barcodeCache[code] = {
               'title': productName,
               'detail': "$instruction\nวัสดุ: $packaging\nรหัส: $code",
