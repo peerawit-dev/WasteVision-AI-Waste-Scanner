@@ -45,6 +45,9 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   IconData rIcon = Icons.info;
   bool isScanning = true, isLoading = false, isTorchOn = false;
   XFile? _imageFile;
+  // AI Multiple Results
+  List<Map<String, dynamic>> aiResults = [];
+  int currentResultIndex = 0;
   // ---------------- cache / rate limit ----------------
   final Map<String, Map<String, dynamic>> _barcodeCache = {};
   DateTime? _lastBarcodeRequestAt;
@@ -57,6 +60,8 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
     isScanning = true;
     isLoading = false;
     rTitle = "";
+    aiResults = [];
+    currentResultIndex = 0;
     if (full) _imageFile = null;
   });
 
@@ -159,14 +164,21 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
             String instruction = "ทิ้งถังน้ำเงิน (ขยะทั่วไป)";
 
             // 🧠 ตรรกะคาดเดาวัสดุ (Fallback Logic)
+            // ก่อนอื่นขอทดลองดูจาก Barcode Range (GS1 Standard)
+            String materialGuess = _classifyByBarcodeRange(code);
+
             if (packaging.isEmpty || packaging == 'null') {
+              if (materialGuess.isNotEmpty) {
+                packaging = 'วิเคราะห์จากรหัส: $materialGuess';
+              }
+
               String nameLower = productName.toLowerCase();
               if (nameLower.contains('coca cola') ||
                   nameLower.contains('coke') ||
                   nameLower.contains('pepsi') ||
                   nameLower.contains('sprite') ||
                   nameLower.contains('est')) {
-                packaging = 'คาดเดาจากชื่อ: ขวดพลาสติก/กระป๋อง';
+                if (packaging == 'null') packaging = 'ขวดพลาสติก/กระป๋อง';
                 binColor = Colors.yellow;
                 binIcon = Icons.recycling;
                 instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
@@ -174,21 +186,32 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
                   nameLower.contains('น้ำดื่ม') ||
                   nameLower.contains('namthip') ||
                   nameLower.contains('crystal')) {
-                packaging = 'คาดเดาจากชื่อ: ขวดพลาสติก PET';
+                if (packaging == 'null') packaging = 'ขวดพลาสติก PET';
                 binColor = Colors.yellow;
                 binIcon = Icons.recycling;
                 instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
               } else if (nameLower.contains('lay') ||
                   nameLower.contains('snack') ||
                   nameLower.contains('ขนม')) {
-                packaging = 'คาดเดาจากชื่อ: ซองฟอยล์/พลาสติก';
+                if (packaging == 'null') packaging = 'ซองฟอยล์/พลาสติก';
                 binColor = Colors.blue;
                 binIcon = Icons.fastfood;
                 instruction = "ทิ้งถังน้ำเงิน (ขยะทั่วไป)";
               } else {
-                packaging = 'ไม่มีข้อมูลวัสดุในระบบ API';
-                instruction =
-                    "ทิ้งถังน้ำเงิน (ขยะทั่วไป) หรือเช็คข้างบรรจุภัณฑ์";
+                if (packaging == 'null') {
+                  packaging = materialGuess.isNotEmpty
+                      ? 'วิเคราะห์จากรหัส: $materialGuess'
+                      : 'ไม่มีข้อมูลวัสดุในระบบ API';
+                }
+                instruction = "ทิ้งถังเหลือง หรือเช็คข้างบรรจุภัณฑ์";
+                // ตรวจสอบวัสดุที่ได้จากการวิเคราะห์
+                if (materialGuess.contains('พลาสติก') ||
+                    materialGuess.contains('ขวด') ||
+                    materialGuess.contains('กล่อง')) {
+                  binColor = Colors.yellow;
+                  binIcon = Icons.recycling;
+                  instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
+                }
               }
             } else {
               // ถ้า API มีข้อมูลวัสดุมาให้ ก็เช็คคำศัพท์
@@ -196,6 +219,12 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
               if (pkgLower.contains('plastic') ||
                   pkgLower.contains('pet') ||
                   pkgLower.contains('พลาสติก')) {
+                binColor = Colors.yellow;
+                binIcon = Icons.recycling;
+                instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
+              } else if (pkgLower.contains('glass') ||
+                  pkgLower.contains('แก้ว') ||
+                  pkgLower.contains('bottle glass')) {
                 binColor = Colors.yellow;
                 binIcon = Icons.recycling;
                 instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
@@ -212,6 +241,27 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
                 binColor = Colors.yellow;
                 binIcon = Icons.recycling;
                 instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
+              } else if (pkgLower.contains('bottle')) {
+                // Generic "bottle" ไม่ชัดว่า glass หรือ plastic
+                // ดูจากชื่อสินค้า
+                String productLower = productName.toLowerCase();
+                if (productLower.contains('sauce') ||
+                    productLower.contains('jam') ||
+                    productLower.contains('honey') ||
+                    productLower.contains('paste') ||
+                    productLower.contains('น้ำจิ้ม') ||
+                    productLower.contains('แยม') ||
+                    productLower.contains('น้ำผึ้ง')) {
+                  // คาดว่า glass ขวด
+                  binColor = Colors.yellow;
+                  binIcon = Icons.recycling;
+                  instruction = "ทิ้งถังเหลือง (รีไซเคิล - ขวดแก้ว)";
+                } else {
+                  // Default: ขวด recyclable
+                  binColor = Colors.yellow;
+                  binIcon = Icons.recycling;
+                  instruction = "ทิ้งถังเหลือง (รีไซเคิล)";
+                }
               }
             }
 
@@ -315,47 +365,71 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
           final labels = await labeler.processImage(inputImage);
           await labeler.close();
           if (labels.isNotEmpty) {
-            final top = labels.first;
-            final labelText = top.label.toLowerCase();
-            final scoreText = "${(top.confidence * 100).toInt()}%";
-            // Simple mapping similar to cloud-based logic
-            if (labelText.contains('bottle') ||
-                labelText.contains('plastic') ||
-                labelText.contains('jar')) {
-              _setResult(
-                "PET Bottle",
-                "ทิ้งถังเหลือง (รีไซเคิล)",
-                scoreText,
-                Colors.yellow,
-                Icons.water_drop,
-              );
-            } else if (labelText.contains('can') ||
-                labelText.contains('aluminum') ||
-                labelText.contains('beer')) {
-              _setResult(
-                "Beverage Can",
-                "ทิ้งถังเหลือง (รีไซเคิล)",
-                scoreText,
-                Colors.yellow,
-                Icons.local_drink,
-              );
-            } else if (labelText.contains('food') ||
-                labelText.contains('fruit') ||
-                labelText.contains('vegetable')) {
-              _setResult(
-                "Organic",
-                "ทิ้งถังเขียว (ขยะเปียก)",
-                scoreText,
-                Colors.green,
-                Icons.restaurant,
-              );
+            aiResults = [];
+            currentResultIndex = 0;
+            final Set<String> usedBinTypes = {};
+            for (var label in labels) {
+              if (aiResults.length >= 5) break;
+              final labelText = label.label.toLowerCase();
+              final scoreText =
+                  "${(label.confidence * 100).toStringAsFixed(2)}%";
+
+              Map<String, dynamic> result = {'title': labelText};
+              if (labelText.contains('bottle') ||
+                  labelText.contains('plastic') ||
+                  labelText.contains('jar')) {
+                result = {
+                  'title': 'PET Bottle',
+                  'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+                  'score': scoreText,
+                  'binColor': Colors.yellow,
+                  'icon': Icons.water_drop,
+                };
+              } else if (labelText.contains('can') ||
+                  labelText.contains('aluminum') ||
+                  labelText.contains('beer')) {
+                result = {
+                  'title': 'Beverage Can',
+                  'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+                  'score': scoreText,
+                  'binColor': Colors.yellow,
+                  'icon': Icons.local_drink,
+                };
+              } else if (labelText.contains('food') ||
+                  labelText.contains('fruit') ||
+                  labelText.contains('vegetable')) {
+                result = {
+                  'title': 'Organic',
+                  'detail': 'ทิ้งถังเขียว (ขยะเปียก)',
+                  'score': scoreText,
+                  'binColor': Colors.green,
+                  'icon': Icons.restaurant,
+                };
+              } else {
+                result = {
+                  'title': labelText,
+                  'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
+                  'score': scoreText,
+                  'binColor': Colors.blue,
+                  'icon': Icons.help_outline,
+                };
+              }
+
+              String binKey = "${result['title']}_${result['binColor']}";
+              if (!usedBinTypes.contains(binKey)) {
+                usedBinTypes.add(binKey);
+                aiResults.add(result);
+              }
+            }
+            if (aiResults.isNotEmpty) {
+              _displayAIResult(0);
             } else {
               _setResult(
-                labelText,
-                "ทิ้งถังน้ำเงิน (ขยะทั่วไป)",
-                scoreText,
-                Colors.blue,
-                Icons.help_outline,
+                "No Object",
+                "ระบบไม่พบวัตถุในภาพ",
+                "0%",
+                Colors.grey,
+                Icons.close,
               );
             }
           } else {
@@ -415,7 +489,7 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
               .timeout(const Duration(seconds: 15));
 
           if (res.statusCode == 200) {
-            _analyzeAI(jsonDecode(res.body));
+            _analyzeAIMultiple(jsonDecode(res.body));
           } else {
             throw Exception("Server Error: ${res.statusCode}");
           }
@@ -434,10 +508,10 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
     return base64Encode(File(path).readAsBytesSync());
   }
 
-  // วิเคราะห์ผล JSON เพื่อระบุประเภทขยะ (ของระบบ AI)
-  void _analyzeAI(Map<String, dynamic> json) {
+  // ฟังก์ชันหลัก: ประมวลผล labelAnnotations หลายรายการ
+  void _analyzeAIMultiple(Map<String, dynamic> json) {
     var res = json['responses']?[0] ?? {};
-    if (res.isEmpty)
+    if (res.isEmpty) {
       return _setResult(
         "No Object",
         "วิเคราะห์ไม่ได้",
@@ -445,116 +519,618 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
         Colors.grey,
         Icons.close,
       );
+    }
 
     String text = (res['textAnnotations']?[0]['description'] ?? "")
         .toString()
         .toLowerCase();
-    String label = res['labelAnnotations']?[0]['description'] ?? "Unknown";
-    double score = (res['labelAnnotations']?[0]['score'] ?? 0) * 100;
-
-    // 🌟 ดึงข้อมูลโลโก้มาช่วยประมวลผล
     String logo = "";
     if (res['logoAnnotations'] != null && res['logoAnnotations'].isNotEmpty) {
       logo = res['logoAnnotations'][0]['description'].toString().toLowerCase();
     }
-    String textAndLogo = "$text | $logo";
 
-    // --- LOGIC แยกถังขยะ (ตรวจสอบ Object + Label + Logo) ---
-    
-    // 🛑 ดักจับอวัยวะมนุษย์ก่อนเลย!
-    if (label.contains(RegExp(r'Finger|Hand|Arm|Person|Human|Skin|Nail'))) {
+    List<dynamic> labels = res['labelAnnotations'] ?? [];
+    if (labels.isEmpty) {
       return _setResult(
-        "Human Body",
-        "นี่มือคนครับ ไม่ใช่ขยะ! \nกรุณาวางขยะลงพื้นแล้วถ่ายใหม่",
-        "${score.toInt()}%",
-        Colors.orange,
-        Icons.warning_amber_rounded,
+        "No Object",
+        "วิเคราะห์ไม่ได้",
+        "0%",
+        Colors.grey,
+        Icons.close,
       );
     }
 
-    if (textAndLogo.contains(RegExp(r'singha|chang|leo|heineken|beer'))) {
-      _setResult(
-        "Glass/Can",
-        "ทิ้งถังเหลือง (รีไซเคิล)",
-        "100%",
-        Colors.yellow,
-        Icons.recycling,
-      );
-    } else if (textAndLogo.contains(
-      RegExp(r'namthip|minere|aura|crystal|purra|water'),
-    )) {
-      _setResult(
-        "PET Bottle",
-        "ทิ้งถังเหลือง (รีไซเคิล)",
-        "100%",
-        Colors.yellow,
-        Icons.water_drop,
-      );
-    } else if (textAndLogo.contains(
-      RegExp(r'coca-cola|coke|cola|pepsi|est|fanta|sprite'),
-    )) {
-      _setResult(
-        "Beverage Can",
-        "ทิ้งถังเหลือง (รีไซเคิล)",
-        "100%",
-        Colors.yellow,
-        Icons.local_drink,
-      );
-    } else if (textAndLogo.contains(
-      RegExp(r'lay|tasto|snack|chip|crisp|doritos'),
-    )) {
-      _setResult(
-        "Snack Bag",
-        "ทิ้งถังน้ำเงิน (ขยะทั่วไป)",
-        "90%",
-        Colors.blue,
-        Icons.fastfood,
-      );
-    } else if (textAndLogo.contains(RegExp(r'tissue|napkin|wipe'))) {
-      _setResult(
-        "Tissue",
-        "ทิ้งถังน้ำเงิน (ขยะทั่วไป)",
-        "95%",
-        Colors.blue,
-        Icons.delete,
-      );
+    // สร้างรายการผลลัพธ์ที่มากขึ้น โดยเรียงตามความแม่นยำและหลีกเลี่ยงรายการที่ซ้ำกัน
+    final Set<String> usedBinTypes =
+        {}; // เก็บประเภทถังเพื่อหลีกเลี่ยงการซ้ำกัน
+    aiResults = [];
+
+    for (var labelItem in labels) {
+      if (aiResults.length >= 5) break; // Max 5 results
+
+      String label = labelItem['description'] ?? "Unknown";
+      double score = (labelItem['score'] ?? 0) * 100;
+      String textAndLogo = "$text | $logo";
+
+      // ตรวจจับสี/ไม่ใช่ขยะ - ข้ามไป
+      if (_isJustColor(label.toLowerCase())) {
+        continue;
+      }
+
+      // ตรวจจับอวัยวะมนุษย์ - แสดงผลแทนที่จะข้าม
+      if (label.contains(
+        RegExp(
+          r'Finger|Hand|Arm|Person|Human|Skin|Nail|Face|Head|Body|Foot|Leg|Ear|Eye|Mouth|Hair|Tooth|Bone|Skull|Torso|Muscle|Wrist|Thumb|Palm',
+        ),
+      )) {
+        var result = {
+          'title': 'Human Body',
+          'detail': 'นี่มือคนครับ ไม่ใช่ขยะ! กรุณาวางขยะลงพื้นแล้วถ่ายใหม่',
+          'score': '${((labelItem["score"] ?? 0) * 100).toStringAsFixed(2)}%',
+          'binColor': Colors.orange,
+          'icon': Icons.warning_amber_rounded,
+        };
+        String binKey = "${result['title']}_${result['binColor']}";
+        if (!usedBinTypes.contains(binKey)) {
+          usedBinTypes.add(binKey);
+          aiResults.add(result);
+        }
+        continue;
+      }
+
+      var result = _classifyWaste(label, score, textAndLogo);
+
+      // หลีกเลี่ยงการซ้ำขยะประเภทเดียวกัน
+      String binKey = "${result['title']}_${result['binColor']}";
+      if (!usedBinTypes.contains(binKey)) {
+        usedBinTypes.add(binKey);
+        aiResults.add(result);
+      }
     }
-    // ตรวจสอบจากรูปร่าง (Label)
-    else if (label.contains(RegExp(r'Bottle|Plastic|Glass|Metal|Can|Tin'))) {
-      _setResult(
-        label,
-        "ทิ้งถังเหลือง (รีไซเคิล)",
-        "${score.toInt()}%",
-        Colors.yellow,
-        Icons.recycling,
-      );
-    } else if (label.contains(RegExp(r'Food|Fruit|Vegetable|Bread'))) {
-      _setResult(
-        label,
-        "ทิ้งถังเขียว (ขยะเปียก)",
-        "${score.toInt()}%",
-        Colors.green,
-        Icons.restaurant,
-      );
-    } else if (label.contains(RegExp(r'Battery|Spray|Insecticide|Chemical'))) {
-      _setResult(
-        "Hazardous",
-        "ทิ้งถังแดง (ขยะอันตราย)",
-        "${score.toInt()}%",
-        Colors.red,
-        Icons.dangerous,
-      );
+
+    if (aiResults.isNotEmpty) {
+      currentResultIndex = 0;
+      _displayAIResult(0);
     } else {
       _setResult(
-        label,
-        "ทิ้งถังน้ำเงิน (ขยะทั่วไป)\nหรือตรวจสอบข้างบรรจุภัณฑ์",
-        "${score.toInt()}%",
-        Colors.blue,
-        Icons.help_outline,
+        "No Object",
+        "ไม่สามารถระบุประเภทขยะได้",
+        "0%",
+        Colors.grey,
+        Icons.close,
       );
     }
   }
 
+  // ฟังก์ชันแยกประเภทขยะจากชื่อและเลขที่
+  Map<String, dynamic> _classifyWaste(
+    String label,
+    double score,
+    String textAndLogo,
+  ) {
+    String labelLower = label.toLowerCase();
+    String scoreText = "${score.toStringAsFixed(2)}%";
+
+    // ========== TEXT/LOGO RECOGNITION (ตรวจจากชื่อแบรนด์) ==========
+
+    // 1. เบียร์และเครื่องดื่มแอลกอฮอล์
+    if (textAndLogo.contains(
+      RegExp(
+        r'singha|chang|leo|heineken|beer|alcohol|bier|lager|whiskey|rum|vodka|gin',
+      ),
+    )) {
+      return {
+        'title': 'Beer/Alcohol Can',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.recycling,
+      };
+    }
+
+    // 2. นม/ไข่กว้าง
+    if (textAndLogo.contains(
+      RegExp(
+        r'milk|dairy|yogurt|plain|meiji|lactasoy|anchor|ตราแรด|ปัญญา|ดาริ',
+      ),
+    )) {
+      return {
+        'title': 'Dairy/Milk Product',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // 3. น้ำดื่ม/น้ำแร่
+    if (textAndLogo.contains(
+      RegExp(r'namthip|minere|aura|crystal|purra|water|น้ำดื่ม|น้ำแร่|aqua'),
+    )) {
+      return {
+        'title': 'Water/Mineral Bottle',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.water_drop,
+      };
+    }
+
+    // 4. เครื่องดื่มหวาน (Soft Drink)
+    if (textAndLogo.contains(
+      RegExp(
+        r'coca-cola|coke|cola|pepsi|est|fanta|sprite|soda|soft drink|น้ำอัดลม|7up',
+      ),
+    )) {
+      return {
+        'title': 'Soft Drink Can/Bottle',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // 5. น้ำผลไม้/น้ำหวาน
+    if (textAndLogo.contains(
+      RegExp(
+        r'juice|fruit drink|tang|ดิบ|น้ำสักวน|น้ำอ้วยอ่อย|น้ำส้ม|orange|apple|grape',
+      ),
+    )) {
+      return {
+        'title': 'Juice/Fruit Drink Bottle',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // 6. กาแฟ/ชา
+    if (textAndLogo.contains(
+      RegExp(r'coffee|tea|nescafe|ovaltine|แฟรี่|ชา|กาแฟ|latte|cappuccino'),
+    )) {
+      return {
+        'title': 'Coffee/Tea Bottle',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // 7. ยา/วิตามิน
+    if (textAndLogo.contains(
+      RegExp(r'medicine|drug|vitamin|pill|tablet|คลินิค|ยา|วิตามิน|เวชสาส'),
+    )) {
+      return {
+        'title': 'Medicine/Pharmacy',
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย - ยา)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // 8. น้ำยาทำความสะอาด/ผลิตภัณฑ์ทำความสะอาด
+    if (textAndLogo.contains(
+      RegExp(
+        r'cleaner|soap|detergent|disinfect|bleach|lion|vim|cif|น้ำยา|สบู่|ผงซักฟอก',
+      ),
+    )) {
+      return {
+        'title': 'Cleaning Product',
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย - สารเคมี)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // 9. กระดาษ/กล่อง
+    if (textAndLogo.contains(
+      RegExp(r'box|paper|carton|cardboard|กล่อง|กระดาษ'),
+    )) {
+      return {
+        'title': 'Paper/Cardboard Box',
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.recycling,
+      };
+    }
+
+    // 10. ขนม/อาหารแห้ง
+    if (textAndLogo.contains(
+      RegExp(r'lay|tasto|snack|chip|crisp|doritos|ขนม|ชิป'),
+    )) {
+      return {
+        'title': 'Snack Bag',
+        'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
+        'score': scoreText,
+        'binColor': Colors.blue,
+        'icon': Icons.fastfood,
+      };
+    }
+
+    if (textAndLogo.contains(RegExp(r'tissue|napkin|wipe|ทิชชู่|กระดาษชำระ'))) {
+      return {
+        'title': 'Tissue/Paper Wipe',
+        'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
+        'score': scoreText,
+        'binColor': Colors.blue,
+        'icon': Icons.delete,
+      };
+    }
+
+    // ========== LABEL DETECTION (ตรวจจากคำอธิบาย AI) ==========
+
+    // Dairy (นม/โยเกิร์ต)
+    if (labelLower.contains(
+      RegExp(r'milk|dairy|yogurt|cream|cheese|butter|condensed milk'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // Beverage & Drink
+    if (labelLower.contains(
+      RegExp(
+        r'soft drink|beverage|beer|alcohol|soda|cola|drink|juice|water|coffee|tea',
+      ),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.local_drink,
+      };
+    }
+
+    // Medicine & Medicine (ยา/วิตามิน)
+    if (labelLower.contains(
+      RegExp(r'medicine|drug|vitamin|pill|tablet|pharmaceutical|capsule'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย - ยา)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // Hazardous Liquid (น้ำมัน/สารเคมี) - เฉพาะลิควิดอันตรายที่ชัด ไม่เอา "liquid" คำเดียว
+    if (labelLower.contains(
+      RegExp(
+        r'oil|chemical|liquid cleaner|liquid soap|liquid medicine|liquid paint|paint|solvent|thinner|น้ำมัน|สารเคมี|toxic|hazard',
+      ),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย - สารเคมี)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // Generic "Liquid" - ไม่ชัดว่าอันตรายหรือไม่ แนะนำให้เช็คข้างบรรจุภัณฑ์
+    if (labelLower.contains('liquid')) {
+      return {
+        'title': label,
+        'detail':
+            'ทิ้งถังน้ำเงิน (ขยะทั่วไป)\nเช็คข้างบรรจุภัณฑ์เพื่อให้แน่ใจว่าอันตรายหรือไม่',
+        'score': scoreText,
+        'binColor': Colors.blue,
+        'icon': Icons.help_outline,
+      };
+    }
+
+    // Cleaning Product
+    if (labelLower.contains(
+      RegExp(r'cleaner|detergent|soap|disinfect|bleach|sanitizer'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // Food/Organic
+    if (labelLower.contains(
+      RegExp(r'food|fruit|vegetable|bread|bakery|pastry|meat|fish|seafood'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังเขียว (ขยะเปียก)',
+        'score': scoreText,
+        'binColor': Colors.green,
+        'icon': Icons.restaurant,
+      };
+    }
+
+    // Bottle/Can/Glass/Metal/Plastic (รีไซเคิล)
+    if (labelLower.contains(
+      RegExp(r'bottle|plastic|glass|metal|can|tin|jar|container|cup'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.recycling,
+      };
+    }
+
+    // Paper/Cardboard
+    if (labelLower.contains(
+      RegExp(r'paper|cardboard|box|carton|tissue|napkin'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
+        'score': scoreText,
+        'binColor': Colors.yellow,
+        'icon': Icons.recycling,
+      };
+    }
+
+    // Textile/Cloth (เสื้อผ้า)
+    if (labelLower.contains(
+      RegExp(r'cloth|fabric|textile|clothing|garment|shirt|pants|towel'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
+        'score': scoreText,
+        'binColor': Colors.blue,
+        'icon': Icons.checkroom,
+      };
+    }
+
+    // Foam/Styrofoam
+    if (labelLower.contains(
+      RegExp(r'foam|styrofoam|polystyrene|cushion|padding'),
+    )) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
+        'score': scoreText,
+        'binColor': Colors.blue,
+        'icon': Icons.dashboard,
+      };
+    }
+
+    if (_isHazardous(labelLower)) {
+      return {
+        'title': label,
+        'detail': 'ทิ้งถังแดง (ขยะอันตราย)',
+        'score': scoreText,
+        'binColor': Colors.red,
+        'icon': Icons.dangerous,
+      };
+    }
+
+    // Default
+    return {
+      'title': label,
+      'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)\nหรือตรวจสอบข้างบรรจุภัณฑ์',
+      'score': scoreText,
+      'binColor': Colors.blue,
+      'icon': Icons.help_outline,
+    };
+  }
+
+  // ฟังก์ชันวิเคราะห์ Barcode Range (GS1) เพื่อแม่นยำกว่า
+  // ดูจากตัวเลข 2-3 ตัวแรกของ barcode เพื่อทายวัสดุ
+  String _classifyByBarcodeRange(String code) {
+    if (code.length < 2) return '';
+
+    String prefix = code.substring(0, 2);
+    String threeDigit = code.length >= 3 ? code.substring(0, 3) : '';
+
+    // ========== THAILAND & SE ASIA (80-89) ==========
+    // 88, 89 = ไทย
+    if (prefix == '88' || prefix == '89') {
+      return 'ขวดพลาสติก PET / กระป๋องอลูมิเนียม / ซองฟอยล์';
+    }
+
+    // ========== EUROPE (40-43) ==========
+    // 40-43 = เยอรมนี, ฝรั่งเศส, สเปน, อิตาลี
+    if (prefix == '40' || prefix == '41' || prefix == '42' || prefix == '43') {
+      return 'ขวดแก้ว / พลาสติก / กระดาษ / กล่องกระดาษ';
+    }
+
+    // ========== JAPAN & EAST ASIA (45, 49) ==========
+    // 45 = ญี่ปุ่น, 49 = ญี่ปุ่น
+    if (prefix == '45' || prefix == '49') {
+      return 'กล่องกระดาษ / ขวด / ถ้วยพลาสติก';
+    }
+
+    // ========== USA & CANADA (00-09) ==========
+    if (prefix == '00' ||
+        prefix == '01' ||
+        prefix == '02' ||
+        prefix == '03' ||
+        prefix == '04' ||
+        prefix == '05' ||
+        prefix == '06' ||
+        prefix == '07' ||
+        prefix == '08' ||
+        prefix == '09') {
+      return 'ขวด / กล่องกระดาษ / ถ้วยพลาสติก';
+    }
+
+    // ========== UK & IRELAND (50) ==========
+    if (prefix == '50') {
+      return 'ขวดแก้ว / กระดาษ / พลาสติก';
+    }
+
+    // ========== AUSTRALIA (93) ==========
+    if (prefix == '93') {
+      return 'ขวด / กล่องกระดาษ / ถ้วยพลาสติก';
+    }
+
+    // ========== VIETNAM (89) ==========
+    if (prefix == '89') {
+      return 'ขวดพลาสติก / กระป๋อง / ซองฟอยล์';
+    }
+
+    // ค่าเริ่มต้น
+    return '';
+  }
+
+  // ฟังก์ชันช่วยเช็ค Hazardous keywords
+  bool _isHazardous(String text) {
+    final hazardousKeywords = [
+      'battery',
+      'spray',
+      'insecticide',
+      'chemical',
+      'electronic',
+      'phone',
+      'mobile',
+      'smartphone',
+      'computer',
+      'device',
+      'electric',
+      'laptop',
+      'tablet',
+      'circuit',
+      'telephony',
+      'communication',
+      'hardware',
+      'gadget',
+      'accessory',
+      'phone case',
+      'charger',
+      'usb',
+      'cable',
+      'adapter',
+      'peripheral',
+      'keyboard',
+      'mouse',
+      'monitor',
+      'display',
+      'printer',
+      'scanner',
+      'copier',
+      'office equipment',
+      'fax machine',
+      'toner',
+      'technology',
+    ];
+    return hazardousKeywords.any((keyword) => text.contains(keyword));
+  }
+
+  // ฟังก์ชันช่วยเช็คว่าเป็นแค่สี/ไม่ใช่ขยะ
+  bool _isJustColor(String text) {
+    final colorKeywords = [
+      'silver',
+      'gold',
+      'black',
+      'white',
+      'red',
+      'blue',
+      'green',
+      'yellow',
+      'pink',
+      'purple',
+      'orange',
+      'brown',
+      'gray',
+      'grey',
+      'beige',
+      'color',
+      'hue',
+      'shade',
+      'tint',
+      'tone',
+    ];
+    return colorKeywords.any((keyword) => text.contains(keyword));
+  }
+
+  // แสดงผลลัพธ์ที่เลือก
+  void _displayAIResult(int index) {
+    if (index < 0 || index >= aiResults.length) return;
+    final result = aiResults[index];
+    setState(() {
+      currentResultIndex = index;
+      rTitle = result['title'] ?? '';
+      rDetail = result['detail'] ?? '';
+      rScore = result['score'] ?? '0%';
+      rColor = result['binColor'] ?? Colors.white;
+      rIcon = result['icon'] ?? Icons.info;
+      isLoading = false;
+    });
+  }
+
+  // แสดง Modal เพื่อเลือกผลลัพธ์เพิ่มเติม
+  void _showMoreResultsModal() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.black87,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (BuildContext context) {
+        return ListView.builder(
+          itemCount: aiResults.length,
+          itemBuilder: (context, index) {
+            final result = aiResults[index];
+            final isSelected = index == currentResultIndex;
+            return Container(
+              color: isSelected
+                  ? Colors.tealAccent.withValues(alpha: 0.2)
+                  : null,
+              child: ListTile(
+                leading: Icon(
+                  result['icon'] ?? Icons.help_outline,
+                  color: result['binColor'] ?? Colors.white,
+                ),
+                title: Text(
+                  result['title'] ?? 'Unknown',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                subtitle: Text(
+                  result['detail'] ?? '',
+                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Text(
+                  result['score'] ?? '0%',
+                  style: TextStyle(
+                    color: result['binColor'] ?? Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                onTap: () {
+                  _displayAIResult(index);
+                  Navigator.pop(context);
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // วิเคราะห์ผล JSON เพื่อระบุประเภทขยะ (ของระบบ AI) - ใช้สำหรับ ML Kit
   // ---------------- 3. UI BUILDER ----------------
   @override
   Widget build(BuildContext context) {
@@ -595,70 +1171,52 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   }
 
   Widget _buildScannerOverlay() {
+    final isBarcode = currentMode == ScanMode.barcode;
+    final frameColor = isBarcode ? Colors.blue : Colors.green;
+    final instructionText = isBarcode
+        ? 'Point camera at barcode'
+        : 'Align waste item in frame';
+
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Mode indicator chip (small & subtle)
           Container(
-            width: 280,
-            height: currentMode == ScanMode.barcode ? 150 : 280,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              border: Border.all(color: Colors.white54),
-              borderRadius: BorderRadius.circular(20),
+              color: frameColor.withOpacity(0.2),
+              border: Border.all(color: frameColor, width: 1),
+              borderRadius: BorderRadius.circular(15),
             ),
-            child: Stack(
-              children: [
-                for (var i = 0; i < 4; i++)
-                  Positioned(
-                    top: i < 2 ? 0 : null,
-                    bottom: i >= 2 ? 0 : null,
-                    left: i % 2 == 0 ? 0 : null,
-                    right: i % 2 != 0 ? 0 : null,
-                    child: Container(
-                      width: 20,
-                      height: 20,
-                      decoration: BoxDecoration(
-                        border: Border(
-                          top: i < 2
-                              ? const BorderSide(
-                                  color: Colors.tealAccent,
-                                  width: 4,
-                                )
-                              : BorderSide.none,
-                          bottom: i >= 2
-                              ? const BorderSide(
-                                  color: Colors.tealAccent,
-                                  width: 4,
-                                )
-                              : BorderSide.none,
-                          left: i % 2 == 0
-                              ? const BorderSide(
-                                  color: Colors.tealAccent,
-                                  width: 4,
-                                )
-                              : BorderSide.none,
-                          right: i % 2 != 0
-                              ? const BorderSide(
-                                  color: Colors.tealAccent,
-                                  width: 4,
-                                )
-                              : BorderSide.none,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
+            child: Text(
+              isBarcode ? 'Barcode Mode' : 'AI Mode',
+              style: TextStyle(
+                color: frameColor,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
           const SizedBox(height: 20),
-          Chip(
-            label: Text(
-              currentMode == ScanMode.barcode
-                  ? "Now Is Barcode Scan Mode"
-                  : "Now Is AI Object Scan Mode",
+          // Smooth rounded scan frame (matches design)
+          Container(
+            width: 280,
+            height: isBarcode ? 150 : 280,
+            decoration: BoxDecoration(
+              border: Border.all(color: frameColor, width: 2),
+              borderRadius: BorderRadius.circular(20),
             ),
-            backgroundColor: Colors.black54,
-            labelStyle: const TextStyle(color: Colors.white),
+          ),
+          const SizedBox(height: 15),
+          // Instructional text
+          Text(
+            instructionText,
+            style: TextStyle(
+              color: frameColor,
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ],
       ),
@@ -690,6 +1248,7 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   );
 
   Widget _buildResultCard() {
+    bool hasMoreResults = aiResults.length > 1;
     return Positioned(
       bottom: 180,
       left: 20,
@@ -762,6 +1321,23 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
                   minHeight: 6,
                 ),
               ),
+              if (hasMoreResults) ...[
+                const SizedBox(height: 15),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _showMoreResultsModal,
+                    icon: const Icon(Icons.list),
+                    label: Text(
+                      'แสดงผลลัพธ์เพิ่มเติม (${aiResults.length - 1} รายการ)',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.tealAccent,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
