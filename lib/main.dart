@@ -7,7 +7,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart'; // for compute
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,9 +34,6 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
     detectionSpeed: DetectionSpeed.noDuplicates,
     returnImage: false,
   );
-  // Toggle to use on-device ML (ML Kit) instead of Google Cloud Vision
-  final bool useOnDeviceMl = false;
-
   // ---------------- STATE ----------------
   ScanMode currentMode = ScanMode.barcode;
   String rTitle = "", rDetail = "", rScore = ""; // ตัวแปรเก็บผลลัพธ์
@@ -50,6 +46,7 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
   int currentResultIndex = 0;
   // ---------------- cache / rate limit ----------------
   final Map<String, Map<String, dynamic>> _barcodeCache = {};
+  static const int _barcodeCacheMaxEntries = 200;
   DateTime? _lastBarcodeRequestAt;
   final Duration _barcodeCooldown = const Duration(seconds: 2);
   final int _maxRetries = 2;
@@ -265,7 +262,12 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
               }
             }
 
-            // cache result
+            // cache result (พร้อมจำกัดขนาด cache ไม่ให้โตไม่จำกัด)
+            if (_barcodeCache.length >= _barcodeCacheMaxEntries) {
+              // ลบตัวแรกสุด (Map ใน Dart เก็บตามลำดับ insertion)
+              final firstKey = _barcodeCache.keys.first;
+              _barcodeCache.remove(firstKey);
+            }
             _barcodeCache[code] = {
               'title': productName,
               'detail': "$instruction\nวัสดุ: $packaging\nรหัส: $code",
@@ -356,143 +358,56 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
         // ----------------------------------------------------
         // 🔀 รางที่ 2: โหมด AI Object (ส่งขึ้น Google Cloud Vision)
         // ----------------------------------------------------
-        // If configured to use on-device ML, use ML Kit labels to avoid sending images to cloud
-        if (useOnDeviceMl) {
-          final inputImage = InputImage.fromFilePath(photo.path);
-          final labeler = ImageLabeler(
-            options: ImageLabelerOptions(confidenceThreshold: 0.45),
-          );
-          final labels = await labeler.processImage(inputImage);
-          await labeler.close();
-          if (labels.isNotEmpty) {
-            aiResults = [];
-            currentResultIndex = 0;
-            final Set<String> usedBinTypes = {};
-            for (var label in labels) {
-              if (aiResults.length >= 5) break;
-              final labelText = label.label.toLowerCase();
-              final scoreText =
-                  "${(label.confidence * 100).toStringAsFixed(2)}%";
-
-              Map<String, dynamic> result = {'title': labelText};
-              if (labelText.contains('bottle') ||
-                  labelText.contains('plastic') ||
-                  labelText.contains('jar')) {
-                result = {
-                  'title': 'PET Bottle',
-                  'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
-                  'score': scoreText,
-                  'binColor': Colors.yellow,
-                  'icon': Icons.water_drop,
-                };
-              } else if (labelText.contains('can') ||
-                  labelText.contains('aluminum') ||
-                  labelText.contains('beer')) {
-                result = {
-                  'title': 'Beverage Can',
-                  'detail': 'ทิ้งถังเหลือง (รีไซเคิล)',
-                  'score': scoreText,
-                  'binColor': Colors.yellow,
-                  'icon': Icons.local_drink,
-                };
-              } else if (labelText.contains('food') ||
-                  labelText.contains('fruit') ||
-                  labelText.contains('vegetable')) {
-                result = {
-                  'title': 'Organic',
-                  'detail': 'ทิ้งถังเขียว (ขยะเปียก)',
-                  'score': scoreText,
-                  'binColor': Colors.green,
-                  'icon': Icons.restaurant,
-                };
-              } else {
-                result = {
-                  'title': labelText,
-                  'detail': 'ทิ้งถังน้ำเงิน (ขยะทั่วไป)',
-                  'score': scoreText,
-                  'binColor': Colors.blue,
-                  'icon': Icons.help_outline,
-                };
-              }
-
-              String binKey = "${result['title']}_${result['binColor']}";
-              if (!usedBinTypes.contains(binKey)) {
-                usedBinTypes.add(binKey);
-                aiResults.add(result);
-              }
-            }
-            if (aiResults.isNotEmpty) {
-              _displayAIResult(0);
-            } else {
-              _setResult(
-                "No Object",
-                "ระบบไม่พบวัตถุในภาพ",
-                "0%",
-                Colors.grey,
-                Icons.close,
-              );
-            }
-          } else {
-            _setResult(
-              "No Object",
-              "ระบบไม่พบวัตถุในภาพ",
-              "0%",
-              Colors.grey,
-              Icons.close,
-            );
-          }
+        // encode on background isolate to avoid blocking UI
+        String base64Image = await compute(
+          _encodeImageToBase64Sync,
+          photo.path,
+        );
+        final apiKey = dotenv.env['GOOGLE_VISION_API_KEY'] ?? '';
+        final proxyUrl = dotenv.env['VISION_PROXY_URL'] ?? '';
+        Uri uri;
+        Map<String, dynamic> body;
+        if (proxyUrl.isNotEmpty) {
+          uri = Uri.parse(proxyUrl);
+          body = {"image": base64Image};
         } else {
-          // encode on background isolate to avoid blocking UI
-          String base64Image = await compute(
-            _encodeImageToBase64Sync,
-            photo.path,
+          uri = Uri.parse(
+            "https://vision.googleapis.com/v1/images:annotate?key=$apiKey",
           );
-          final apiKey = dotenv.env['GOOGLE_VISION_API_KEY'] ?? '';
-          final proxyUrl = dotenv.env['VISION_PROXY_URL'] ?? '';
-          Uri uri;
-          Map<String, dynamic> body;
-          if (proxyUrl.isNotEmpty) {
-            uri = Uri.parse(proxyUrl);
-            body = {"image": base64Image};
-          } else {
-            uri = Uri.parse(
-              "https://vision.googleapis.com/v1/images:annotate?key=$apiKey",
-            );
-            body = {
-              "requests": [
-                {
-                  "image": {"content": base64Image},
-                  "features": [
-                    {"type": "OBJECT_LOCALIZATION"},
-                    {"type": "LABEL_DETECTION"},
-                    {"type": "LOGO_DETECTION"},
-                  ],
-                },
-              ],
-            };
-          }
-
-          // Build headers: always set content-type; if calling a proxy (e.g., Supabase Edge Function)
-          // include optional auth headers: VISION_PROXY_KEY or SUPABASE_ACCESS_TOKEN from .env
-          final Map<String, String> headers = {
-            "Content-Type": "application/json",
+          body = {
+            "requests": [
+              {
+                "image": {"content": base64Image},
+                "features": [
+                  {"type": "OBJECT_LOCALIZATION"},
+                  {"type": "LABEL_DETECTION"},
+                  {"type": "LOGO_DETECTION"},
+                ],
+              },
+            ],
           };
-          final proxyKey = dotenv.env['VISION_PROXY_KEY'] ?? '';
-          final supabaseToken = dotenv.env['SUPABASE_ACCESS_TOKEN'] ?? '';
-          if (proxyUrl.isNotEmpty && proxyKey.isNotEmpty)
-            headers['x-proxy-key'] = proxyKey;
-          if (proxyUrl.isNotEmpty && supabaseToken.isNotEmpty)
-            headers['Authorization'] = 'Bearer $supabaseToken';
+        }
 
-          var res = await http
-              .post(uri, headers: headers, body: jsonEncode(body))
-              .timeout(const Duration(seconds: 15));
+        // Build headers: always set content-type; if calling a proxy (e.g., Supabase Edge Function)
+        // include optional auth headers: VISION_PROXY_KEY or SUPABASE_ACCESS_TOKEN from .env
+        final Map<String, String> headers = {
+          "Content-Type": "application/json",
+        };
+        final proxyKey = dotenv.env['VISION_PROXY_KEY'] ?? '';
+        final supabaseToken = dotenv.env['SUPABASE_ACCESS_TOKEN'] ?? '';
+        if (proxyUrl.isNotEmpty && proxyKey.isNotEmpty)
+          headers['x-proxy-key'] = proxyKey;
+        if (proxyUrl.isNotEmpty && supabaseToken.isNotEmpty)
+          headers['Authorization'] = 'Bearer $supabaseToken';
 
-          if (res.statusCode == 200) {
-            _analyzeAIMultiple(jsonDecode(res.body));
-          } else {
-            throw Exception("Server Error: ${res.statusCode}");
-          }
+        var res = await http
+            .post(uri, headers: headers, body: jsonEncode(body))
+            .timeout(const Duration(seconds: 15));
+
+        if (res.statusCode == 200) {
+          _analyzeAIMultiple(jsonDecode(res.body));
+        } else {
+          throw Exception("Server Error: ${res.statusCode}");
         }
       }
     } catch (e) {
@@ -550,31 +465,11 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
 
       String label = labelItem['description'] ?? "Unknown";
       double score = (labelItem['score'] ?? 0) * 100;
+      String labelLower = label.toLowerCase();
       String textAndLogo = "$text | $logo";
 
-      // ตรวจจับสี/ไม่ใช่ขยะ - ข้ามไป
-      if (_isJustColor(label.toLowerCase())) {
-        continue;
-      }
-
-      // ตรวจจับอวัยวะมนุษย์ - แสดงผลแทนที่จะข้าม
-      if (label.contains(
-        RegExp(
-          r'Finger|Hand|Arm|Person|Human|Skin|Nail|Face|Head|Body|Foot|Leg|Ear|Eye|Mouth|Hair|Tooth|Bone|Skull|Torso|Muscle|Wrist|Thumb|Palm',
-        ),
-      )) {
-        var result = {
-          'title': 'Human Body',
-          'detail': 'นี่มือคนครับ ไม่ใช่ขยะ! กรุณาวางขยะลงพื้นแล้วถ่ายใหม่',
-          'score': '${((labelItem["score"] ?? 0) * 100).toStringAsFixed(2)}%',
-          'binColor': Colors.orange,
-          'icon': Icons.warning_amber_rounded,
-        };
-        String binKey = "${result['title']}_${result['binColor']}";
-        if (!usedBinTypes.contains(binKey)) {
-          usedBinTypes.add(binKey);
-          aiResults.add(result);
-        }
+      // ตรวจจับสี/ไม่ใช่ขยะ หรือสิ่งที่เกี่ยวกับมนุษย์/ใบหน้า/การแสดงอารมณ์ เช่น smile แล้วข้ามไป
+      if (_isJustColor(labelLower) || _isHumanRelated(labelLower)) {
         continue;
       }
 
@@ -937,7 +832,6 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
     if (code.length < 2) return '';
 
     String prefix = code.substring(0, 2);
-    String threeDigit = code.length >= 3 ? code.substring(0, 3) : '';
 
     // ========== THAILAND & SE ASIA (80-89) ==========
     // 88, 89 = ไทย
@@ -1058,6 +952,63 @@ class _WasteScannerScreenState extends State<WasteScannerScreen> {
       'tone',
     ];
     return colorKeywords.any((keyword) => text.contains(keyword));
+  }
+
+  // ฟังก์ชันช่วยเช็คว่าเกี่ยวข้องกับมนุษย์/ใบหน้า/การแสดงอารมณ์ (เช่น smile, face, person)
+  bool _isHumanRelated(String text) {
+    final humanKeywords = [
+      'person',
+      'people',
+      'human',
+      'man',
+      'woman',
+      'boy',
+      'girl',
+      'kid',
+      'child',
+      'face',
+      'facial',
+      'smile',
+      'smiling',
+      'laugh',
+      'laughing',
+      'mouth',
+      'lip',
+      'cheek',
+      'eye',
+      'eyelid',
+      'pupil',
+      'iris',
+      'eyebrow',
+      'nose',
+      'ear',
+      'hair',
+      'head',
+      'hand',
+      'arm',
+      'finger',
+      'thumb',
+      'palm',
+      'wrist',
+      'elbow',
+      'leg',
+      'thigh',
+      'knee',
+      'ankle',
+      'foot',
+      'toe',
+      'body',
+      'torso',
+      'chest',
+      'back',
+      'shoulder',
+      'neck',
+      'skin',
+      'gesture',
+      'selfie',
+      'portrait',
+    ];
+    return humanKeywords.any((keyword) => text.contains(keyword));
   }
 
   // แสดงผลลัพธ์ที่เลือก
