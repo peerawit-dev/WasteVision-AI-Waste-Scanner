@@ -1,35 +1,59 @@
 # 🗑️ WasteVision — AI Waste Scanner
 
-> A Flutter mobile app that helps users sort waste correctly using **Barcode scanning** and **AI-powered object detection** via Google Cloud Vision API.
+> **EN:** A Flutter mobile app that helps users sort waste correctly using **Barcode scanning** and **AI-powered object detection** via Google Cloud Vision API.
+>
+> **TH:** แอปพลิเคชัน Flutter ที่ช่วยให้ผู้ใช้คัดแยกขยะได้อย่างถูกต้อง ด้วยการ **สแกนบาร์โค้ด** และ **การตรวจจับวัตถุด้วย AI** ผ่าน Google Cloud Vision API
 
 ---
 
-## 📱 Features
+## 📱 Features / ฟีเจอร์
 
 ### 🔖 Barcode Mode
-- Scan product barcodes and fetch packaging data from **OpenFoodFacts API**
-- Automatically classifies waste type (Recycle / General / Hazardous)
-- **Fallback Logic** — if API has no packaging data, the app analyzes by:
+- EN: Scan product barcodes and fetch packaging data from **OpenFoodFacts API**
+- TH: สแกนบาร์โค้ดสินค้าและดึงข้อมูลบรรจุภัณฑ์จาก **OpenFoodFacts API**
+
+- EN: Automatically classifies waste type (Recycle / General / Hazardous)
+- TH: จำแนกประเภทขยะโดยอัตโนมัติ (รีไซเคิล / ทั่วไป / อันตราย)
+
+- **Fallback Logic** — EN: If the API has no packaging data, the app analyzes by:
   - **GS1 Barcode Range** (country/manufacturer prefix)
   - **Product name keywords** (e.g. coca cola → plastic bottle → recycle bin)
-- Built-in **Cache** — avoids duplicate API calls for the same barcode
-- **Rate Limiting** — 2-second cooldown between requests
-- **Auto Retry** — retries up to 2 times with exponential backoff on network failure
+- TH: หาก API ไม่มีข้อมูลบรรจุภัณฑ์ แอปจะวิเคราะห์จาก:
+  - **GS1 Barcode Range** (รหัสประเทศ/ผู้ผลิต)
+  - **คำสำคัญในชื่อสินค้า** (เช่น coca cola → ขวดพลาสติก → ถังรีไซเคิล)
+
+- **Cache** — EN: Avoids duplicate API calls for the same barcode / TH: ป้องกันการเรียก API ซ้ำสำหรับบาร์โค้ดเดิม
+- **Rate Limiting** — EN: 2-second cooldown between requests / TH: หน่วงเวลา 2 วินาทีระหว่างคำขอ
+- **Auto Retry** — EN: Retries up to 2 times with exponential backoff on network failure / TH: ลองใหม่อัตโนมัติสูงสุด 2 ครั้งเมื่อเครือข่ายขัดข้อง
 
 ### 🤖 AI Object Mode
-- Capture or pick an image from gallery
-- Sends image to **Google Cloud Vision API** (Object Localization + Label Detection + Logo Detection)
-- Classifies waste from detected objects and brand logos
-- Returns **up to 5 results** ranked by confidence score
-- Detects hands in frame and warns user before processing
+- EN: Capture or pick an image from gallery
+- TH: ถ่ายภาพหรือเลือกจากแกลเลอรี
+
+- EN: Sends image to **Google Cloud Vision API** (Object Localization + Label Detection + Logo Detection)
+- TH: ส่งภาพไปยัง **Google Cloud Vision API** (ระบุตำแหน่งวัตถุ + ตรวจจับ Label + ตรวจจับโลโก้)
+
+- EN: Classifies waste from detected objects and brand logos
+- TH: จำแนกประเภทขยะจากวัตถุและโลโก้ที่ตรวจพบ
+
+- EN: Returns **up to 5 results** ranked by confidence score
+- TH: แสดงผลลัพธ์สูงสุด **5 รายการ** เรียงตามคะแนนความมั่นใจ
+
+- EN: Detects hands in frame and warns user before processing
+- TH: ตรวจจับมือในภาพและแจ้งเตือนผู้ใช้ก่อนประมวลผล
 
 ---
 
-## 🔐 Security
+## 🔐 Security / ความปลอดภัย
 
-- API Key stored in `.env` file — **never hardcoded**
-- Supports **Supabase Edge Function Proxy** to prevent API Key exposure from the client
-- `.env` is listed in `.gitignore` — safe to push
+- EN: API Key stored in `.env` file — **never hardcoded**
+- TH: เก็บ API Key ไว้ในไฟล์ `.env` — **ไม่ hardcode ในโค้ด**
+
+- EN: Supports **Supabase Edge Function Proxy** to prevent API Key exposure from the client
+- TH: รองรับ **Supabase Edge Function Proxy** เพื่อป้องกัน API Key รั่วไหลจาก client
+
+- EN: `.env` is listed in `.gitignore` — safe to push
+- TH: `.env` อยู่ใน `.gitignore` — push ได้อย่างปลอดภัย
 
 ```
 GOOGLE_VISION_API_KEY=your_key_here
@@ -40,14 +64,14 @@ SUPABASE_ACCESS_TOKEN=your_token                    # optional
 
 ---
 
-## 🧠 Waste Classification Logic
+## 🧠 Waste Classification Logic / ตรรกะการจำแนกขยะ
 
-| Material | Bin |
+| Material / วัสดุ | Bin / ถัง |
 |---|---|
-| Plastic, PET, Glass, Aluminium, Paper/Carton | 🟡 Yellow (Recycle) |
-| Food scraps, Organic | 🟢 Green (Wet waste) |
-| Foil packaging, Mixed material | 🔵 Blue (General) |
-| Batteries, Electronics | 🔴 Red (Hazardous) |
+| Plastic, PET, Glass, Aluminium, Paper/Carton | 🟡 Yellow — Recycle / รีไซเคิล |
+| Food scraps, Organic | 🟢 Green — Wet waste / ขยะเปียก |
+| Foil packaging, Mixed material | 🔵 Blue — General / ทั่วไป |
+| Batteries, Electronics | 🔴 Red — Hazardous / อันตราย |
 
 ---
 
@@ -65,7 +89,7 @@ SUPABASE_ACCESS_TOKEN=your_token                    # optional
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started / วิธีติดตั้ง
 
 **1. Clone the repo**
 ```bash
@@ -73,24 +97,24 @@ git clone https://github.com/JAMEJCG/WasteVision-AI-Waste-Scanner.git
 cd WasteVision-AI-Waste-Scanner
 ```
 
-**2. Install dependencies**
+**2. Install dependencies / ติดตั้ง dependencies**
 ```bash
 flutter pub get
 ```
 
-**3. Create `.env` file**
+**3. Create `.env` file / สร้างไฟล์ `.env`**
 ```
 GOOGLE_VISION_API_KEY=your_key_here
 ```
 
-**4. Run the app**
+**4. Run the app / รันแอป**
 ```bash
 flutter run
 ```
 
 ---
 
-## 📁 Project Structure
+## 📁 Project Structure / โครงสร้างโปรเจค
 
 ```
 lib/
@@ -99,12 +123,18 @@ lib/
 
 ---
 
-## ⚠️ Notes
+## ⚠️ Notes / หมายเหตุ
 
-- OpenFoodFacts API has limited Thai product data — Fallback Logic handles missing packaging info
-- Cloud Vision API requires billing to be enabled on Google Cloud Console
-- Tested on Android
+- EN: OpenFoodFacts API has limited Thai product data — Fallback Logic handles missing packaging info
+- TH: OpenFoodFacts API มีข้อมูลสินค้าไทยจำกัด — Fallback Logic จัดการกรณีที่ไม่มีข้อมูลบรรจุภัณฑ์
+
+- EN: Cloud Vision API requires billing to be enabled on Google Cloud Console
+- TH: Cloud Vision API ต้องเปิดใช้งานการเรียกเก็บเงินใน Google Cloud Console
+
+- EN: Tested on Android
+- TH: ทดสอบบน Android
 
 ---
 
-*Built by [Peerawit Aiamoakson (James)](https://github.com/JAMEJCG) — Digital Technology, Phuket Rajabhat University*
+*Built by [Peerawit Aiamoakson (James)](https://github.com/JAMEJCG) and Suchanan Khanphrasaeng(Sam) — Digital Technology, Phuket Rajabhat University*
+*พัฒนาโดย [พีรวิชญ์ เอี่ยมอักษร (เจมส์)](https://github.com/JAMEJCG) และ สุชานันท์ ขันพระแสง(แซม) — สาขาเทคโนโลยีดิจิทัล มหาวิทยาลัยราชภัฏภูเก็ต*
