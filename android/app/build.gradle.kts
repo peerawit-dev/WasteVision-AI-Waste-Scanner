@@ -42,8 +42,21 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")
         }
     }
-}
 
+    applicationVariants.all {
+    val variant = this
+    variant.outputs.all {
+        val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+        val abi = output.filters.find { it.filterType == "ABI" }?.identifier
+        
+        output.outputFileName = if (abi != null) {
+            "WasteVision-${variant.versionName}-${abi}.apk"
+        } else {
+            "WasteVision-${variant.versionName}-universal.apk"
+        }
+    }
+}
+}
 flutter {
     source = "../.."
 }
